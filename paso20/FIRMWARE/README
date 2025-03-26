@@ -1,0 +1,47 @@
+Para compilar el assembly presente en esta carpeta...
+
+Clonar el siguiente repositorio: https://github.com/BrunoLevy/learn-fpga
+
+Una vez descargado, dentro del repositorio, realizar `make ULX3S`. No es particularmente importante la salida de este comando,
+salvo por el programa `/home/usuario/Fuentes/RISCV/learn-fpga/learn-fpga/FemtoRV/FIRMWARE/TOOLS/firmware_words`. Si la compilacion
+da problemas al momento de cargar el programa por el JTAG, no hay que preocuparse, debido a que nosotros utilizamos otro
+SW de grabacion de la FPGA (`openFPGALoader`) y no viene por defecto en la compilacion.
+
+Yo recomiendo personalmente copiar el binario `firmware_words` directamente a la carpeta `/usr/local/bin` para poder ser ejecutado 
+libremente para futuras conversiones de binarios
+
+```
+  $ riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 -mno-relax start.S -o start.o  
+  $ riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 -mno-relax blinker.S -o blinker.o
+  $ riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 -mno-relax wait.S -o wait.o 
+```
+
+una vez creados los archivos .o como se muestran arriba, pasamos a la siguiente etapa que es la de la creacion del archivo de linkeo
+
+```
+MEMORY
+{
+   BRAM (RWX) : ORIGIN = 0x0000, LENGTH = 0x1800  /* 6kB RAM */
+}
+SECTIONS
+{
+    everything :
+    {
+        . = ALIGN(4);
+        start.o (.text)
+        *(.*)
+    } >BRAM
+}
+```
+
+finalmente... con todos los .o y el archivo .ld terminamos con la compilacion final.
+
+`  $ riscv64-unknown-elf-ld blinker.o wait.o -o blinker.bram.elf -T bram.ld -m elf32lriscv -nostdlib -norelax`
+
+`firmware_words blinker.bram.elf -ram 262144 -max_addr 131071 -out blinker.bram.hex`
+
+Algunas potencias de 2 utiles
+
+2^16 65535
+2^17 131071
+2^18 262143

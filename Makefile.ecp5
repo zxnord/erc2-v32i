@@ -1,0 +1,50 @@
+
+IDCODE ?= 0x41113043 # 85f
+
+PNR ?= nextpnr-ecp5
+LOADER ?= openFPGALoader
+
+%.bit: %.config
+	ecppack --idcode $(IDCODE) $(basename $@)/$< $(basename $@)/$@
+
+%.svf: %.config
+	ecppack --idcode $(IDCODE) --input $(basename $@)/$< --svf $(basename $@)/$@
+
+# Generate a desired MHz pll
+pll_%.v:
+	ecppll \
+		-i 25 \
+		-o $(subst pll_,,$(basename $@)) \
+		-n $(basename $@) \
+		-f $@
+
+%.json: $(basename $@)/%.v
+	$(ICEPATH)yosys \
+		-q \
+		-p 'read_verilog $<' \
+		-p 'synth_ecp5 -top SOC -json $(basename $@)/$@' \
+		-E $(basename $@)/.$(basename $@).d \
+
+%.upload: %.bit
+	$(LOADER) \
+		--board ulx3s \
+		$(basename $@)/$(basename $@).bit \
+
+%.flash: %.bit
+	$(LOADER) \
+		--write-flash \
+		--unprotect-flash \
+		--board ulx3s \
+		$(basename $@)/$(basename $@).bit \
+
+%.config: %.json
+	$(PNR) \
+		--json $(basename $@)/$< \
+		--textcfg $(basename $@)/$@ \
+		--lpf ulx3s_v3.lpf \
+		--85k \
+		--package CABGA381
+
+
+clean:
+	$(RM) *.svf *.config *.bit *.json .*.d
