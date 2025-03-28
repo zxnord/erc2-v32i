@@ -6,7 +6,7 @@
 
 `default_nettype none
 
-`include "../paso2/clockworks.v"
+`include "../paso02/clockworks.v"
 
 module SOC (
     input  clk_25mhz,   // system clock 
@@ -28,7 +28,7 @@ module SOC (
     reg [31:0] instr;       // current instruction
 
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
     initial begin
         LUI(x1, 32'b11111111111111111111111111111111);     // Just takes the 20 MSBs (12 LSBs ignored)
         ORI(x1, x1, 32'b11111111111111111111111111111111); // Sets the 12 LSBs (20 MSBs ignored)

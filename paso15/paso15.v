@@ -5,7 +5,7 @@
  */
 
 `default_nettype none
-`include "../paso2/clockworks.v"
+`include "../paso02/clockworks.v"
 
 `include "memoria_paso15.v"
 `include "procesador_paso15.v"

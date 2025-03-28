@@ -22,7 +22,7 @@ module Memory (
 `endif
 
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
     integer L0_   = 12;
     integer L1_   = 40;
     integer wait_ = 64;

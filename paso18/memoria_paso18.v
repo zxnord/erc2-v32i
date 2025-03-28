@@ -34,7 +34,7 @@ module Memory (
         end
     endfunction
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
 
     `define mandel_shift 10
     `define mandel_mul (1 << `mandel_shift)

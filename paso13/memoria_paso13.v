@@ -20,7 +20,7 @@
 `endif
 
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
     integer L0_   = 4;
     integer wait_ = 20;
     integer L1_   = 28;

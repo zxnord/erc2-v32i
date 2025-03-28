@@ -13,7 +13,7 @@ module Memory (
 
     reg [31:0] MEM [0:255]; 
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
     integer L0_=8;
     integer L1_=16;
     initial begin

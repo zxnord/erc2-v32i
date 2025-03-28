@@ -1,12 +1,13 @@
 /**
- * Step 5: Creating a RISC-V processor
- *         The register bank and the state machine
- * LEDs show state.
+ * Step 4: Creating a RISC-V processor
+ *         The instruction decoder
+ * central LED blinks, other LEDs show instr type.
  * DONE*
  */
 
 `default_nettype none
-`include "../paso2/clockworks.v"
+
+`include "../paso02/clockworks.v"
 
 module SOC (
     input  clk_25mhz,   // reloj de sistema
@@ -16,21 +17,20 @@ module SOC (
     output ftdi_txd     // UART transmit
 );
 
-    wire clk;               // internal clock
-    wire resetn;            // internal reset signal, goes low on reset
+    wire clk;    // internal clock
+    wire resetn; // internal reset signal, goes low on reset
 
-    reg [31:0] MEM [0:255];
-    reg [31:0] PC;          // program counter
-    reg [31:0] instr;       // current instruction
+    reg [31:0] MEM [0:255]; 
+    reg [31:0] PC;       // program counter
+    reg [31:0] instr;    // current instruction
 
     initial begin
         PC = 0;
-
         // add x0, x0, x0
         //                   rs2   rs1  add  rd   ALUREG
         instr = 32'b0000000_00000_00000_000_00000_0110011;
         // add x1, x0, x0
-        //                    rs2   rs1  add  rd   ALUREG
+        //                    rs2   rs1  add  rd  ALUREG
         MEM[0] = 32'b0000000_00000_00000_000_00001_0110011;
         // addi x1, x1, 1
         //             imm         rs1  add  rd   ALUIMM
@@ -43,17 +43,21 @@ module SOC (
         MEM[3] = 32'b000000000001_00001_000_00001_0010011;
         // addi x1, x1, 1
         //             imm         rs1  add  rd   ALUIMM
-         MEM[4] = 32'b000000000001_00001_000_00001_0010011;
-
+        MEM[4] = 32'b000000000001_00001_000_00001_0010011;
+        // lw x2,0(x1)
+        //             imm         rs1   w   rd   LOAD
+        MEM[5] = 32'b000000000000_00001_010_00010_0000011;
+        // sw x2,0(x1)
+        //             imm   rs2   rs1   w   imm  STORE
+        MEM[6] = 32'b000000_00010_00001_010_00000_0100011;
         // ebreak
         //                                        SYSTEM
-        MEM[5] = 32'b000000000001_00000_000_00000_1110011;
-       
+        MEM[7] = 32'b000000000001_00000_000_00000_1110011;
     end
 
-   
+
     // See the table P. 105 in RISC-V manual
-   
+
     // The 10 RISC-V instructions
     wire isALUreg  =  (instr[6:0] == 7'b0110011); // rd <- rs1 OP rs2   
     wire isALUimm  =  (instr[6:0] == 7'b0010011); // rd <- rs1 OP Iimm
@@ -82,104 +86,54 @@ module SOC (
     wire [2:0] funct3 = instr[14:12];
     wire [6:0] funct7 = instr[31:25];
    
-    // The registers bank
-    reg [31:0] RegisterBank [0:31];
-    reg [31:0] rs1;
-    reg [31:0] rs2;
-    wire [31:0] writeBackData;
-    wire        writeBackEn;
-    assign writeBackData = 0; // for now
-    assign writeBackEn = 0;   // for now
-
-`ifdef BENCH   
-    integer i;
-    initial begin
-        for(i=0; i<32; ++i) begin
-            RegisterBank[i] = 0;
-        end
-    end
-`endif   
-
-    // The state machine
-   
-    localparam FETCH_INSTR = 0;
-    localparam FETCH_REGS  = 1;
-    localparam EXECUTE     = 2;
-    reg [1:0] state = FETCH_INSTR;
-   
     always @(posedge clk) begin
         if(!resetn) begin
-            PC    <= 0;
-            state <= FETCH_INSTR;
+            PC <= 0;
             instr <= 32'b0000000_00000_00000_000_00000_0110011; // NOP
-        end else begin
-            if(writeBackEn && rdId != 0) begin
-                RegisterBank[rdId] <= writeBackData;
-            end
+        end else if(!isSYSTEM) begin
+            instr <= MEM[PC];
+            PC <= PC+1;
+        end
+`ifdef BENCH
+        if(isSYSTEM) $finish();
+`endif
+    end
 
-            case(state)
-                FETCH_INSTR: begin
-                    instr <= MEM[PC];
-                    state <= FETCH_REGS;
-                end
-                FETCH_REGS: begin
-                    rs1 <= RegisterBank[rs1Id];
-                    rs2 <= RegisterBank[rs2Id];
-                    state <= EXECUTE;
-                end
-                EXECUTE: begin
-                    if(!isSYSTEM) begin
-                        PC <= PC + 1;
-                    end
-                    state <= FETCH_INSTR;	      
-`ifdef BENCH      
-                    if(isSYSTEM) $finish();
-`endif      
-                end
-            endcase
-        end 
-    end 
-
-    assign led = isSYSTEM ? 31 : (1 << state);
+    assign led = isSYSTEM ? 0 : {PC[0],isALUreg,isStore};
 
 `ifdef BENCH
     always @(posedge clk) begin
-        if(state == FETCH_REGS) begin
-            case (1'b1)
-                isALUreg: $display(
-                    "ALUreg rd=%d rs1=%d rs2=%d funct3=%b",
-                    rdId, rs1Id, rs2Id, funct3
-                );
-                isALUimm: $display(
-                    "ALUimm rd=%d rs1=%d imm=%0d funct3=%b",
-                    rdId, rs1Id, Iimm, funct3
-                );
-                isBranch: $display("BRANCH");
-                isJAL:    $display("JAL");
-                isJALR:   $display("JALR");
-                isAUIPC:  $display("AUIPC");
-                isLUI:    $display("LUI");	
-                isLoad:   $display("LOAD");
-                isStore:  $display("STORE");
-                isSYSTEM: $display("SYSTEM");
-            endcase 
-            if(isSYSTEM) begin
-                $finish();
-            end
-        end 
+        $display("PC=%0d",PC);
+        case (1'b1)
+            isALUreg: $display(
+                "ALUreg rd=%d rs1=%d rs2=%d funct3=%b",
+                rdId, rs1Id, rs2Id, funct3
+            );
+            isALUimm: $display(
+                "ALUimm rd=%d rs1=%d imm=%0d funct3=%b",
+                rdId, rs1Id, Iimm, funct3
+            );
+            isBranch: $display("BRANCH");
+            isJAL:    $display("JAL");
+            isJALR:   $display("JALR");
+            isAUIPC:  $display("AUIPC");
+            isLUI:    $display("LUI");	
+            isLoad:   $display("LOAD");
+            isStore:  $display("STORE");
+            isSYSTEM: $display("SYSTEM");
+        endcase 
     end
 `endif
 
     // Gearbox and reset circuitry.
     Clockworks #(
-        .SLOW(24) // Divide clock frequency by 2^21
+        .SLOW(25) // Divide clock frequency by 2^25
     )CW(
         .CLK(clk_25mhz),
         .RESET(rst),
         .clk(clk),
         .resetn(resetn)
     );
-   
+
     assign ftdi_txd  = 1'b0; // not used for now   
-   
 endmodule

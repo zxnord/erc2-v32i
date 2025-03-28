@@ -6,7 +6,7 @@
 
 `default_nettype none
 
-`include "../paso2/clockworks.v"
+`include "../paso02/clockworks.v"
 
 module SOC (
     input clk_25mhz,    // reloj de sistema
@@ -27,7 +27,7 @@ module SOC (
     reg [31:0] PC=0;        // program counter
     reg [31:0] instr;       // current instruction
 
-`include "../paso7/riscv_assembly.v"
+`include "../paso07/riscv_assembly.v"
 
     integer L0_=4;
     initial begin
