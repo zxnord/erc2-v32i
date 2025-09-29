@@ -1,0 +1,13 @@
+# Verilog/FPGA build artifacts
+*.json
+*.asc
+*.bit
+*.config
+*.o
+*.elf
+*.hex
+*.bin
+
+# Python cache
+__pycache__/
+*.pyc
