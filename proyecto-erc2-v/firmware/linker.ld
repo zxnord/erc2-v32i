@@ -1,5 +1,5 @@
 /*
- * linker.ld - Script de enlazador para erc2-v
+ * linker.ld - Script de enlazador robusto para erc2-v
  */
 
 OUTPUT_ARCH(riscv)
@@ -7,16 +7,38 @@ ENTRY(_start)
 
 MEMORY
 {
-  /* La memoria RAM empieza en 0x0 y tiene 16KB de tamaño */
-  ram (rwx) : ORIGIN = 0x00000000, LENGTH = 16K
+  /* RAM de 4KB, como en el hardware */
+  ram (rwx) : ORIGIN = 0x00000000, LENGTH = 4K
 }
 
 SECTIONS
 {
-  /* La sección de código (.text) se coloca al principio de la RAM */
-  .text :
-  {
-    . = ORIGIN(ram);
+  /* Sección de código */
+  .text : {
+    *(.text.init)
     *(.text .text.*)
   } > ram
+
+  /* Sección de datos de solo lectura */
+  .rodata : {
+    . = ALIGN(4);
+    *(.rodata .rodata.*)
+  } > ram
+
+  /* Sección de datos inicializados */
+  .data : {
+    . = ALIGN(4);
+    *(.data .data.*)
+  } > ram
+
+  /* Sección de datos no inicializados (a limpiar a cero) */
+  .bss : {
+    . = ALIGN(4);
+    __bss_start = .;
+    *(.bss .bss.*)
+    __bss_end = .;
+  } > ram
+
+  /* Símbolo para el final de la memoria utilizada por el programa */
+  _end = .;
 }

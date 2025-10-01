@@ -23,18 +23,11 @@ module erc2_v_final (
     // --- CPU y Memoria ---
     reg [31:0] pc = 0;
     reg [31:0] instruction;
-    reg [31:0] memory [0:7];
+    reg [31:0] memory [0:1023];    // Memoria de 1024 palabras (4KB), asíncrona
 
+    // Carga del programa desde un fichero externo
     initial begin
-        // Nuevo programa de prueba para LOAD/STORE
-        memory[0] = 32'h0CC00113; // addi x2, x0, 0xCC  (li x2, 0xCC)
-        memory[1] = 32'h00202223; // sw   x2, 4(x0)
-        memory[2] = 32'h00402183; // lw   x3, 4(x0)
-        memory[3] = 32'h00118093; // addi x1, x3, 1
-        memory[4] = 32'h0000006F; // jal  x0, 0 (bucle infinito en esta misma instrucción)
-        memory[5] = 32'h00000000; // NOP
-        memory[6] = 32'h00000000; // NOP
-        memory[7] = 32'h00000000; // NOP
+        $readmemh("firmware/firmware.hex", memory);
     end
 
     // --- Decodificación ---
@@ -103,7 +96,7 @@ module erc2_v_final (
     wire [31:0] rd_wdata;
     wire [31:0] mem_access_addr = rs1_data + (is_load ? imm_i : imm_s);
 
-    assign rd_wdata = is_load ? memory[mem_access_addr[4:2]] :
+    assign rd_wdata = is_load ? memory[mem_access_addr[11:2]] :
                       is_lui  ? imm_u :
                       is_auipc? pc + imm_u :
                       (is_jal || is_jalr) ? pc + 4 :
@@ -119,24 +112,21 @@ module erc2_v_final (
             pc <= 0;
             state <= FETCH;
         end else begin
-            // La escritura en registros y LEDs ocurre aquí, usando los valores combinacionales
+            // La escritura en registros ocurre aquí, usando los valores combinacionales
             if (rd_wenable && rdId != 0) begin
                 registers[rdId] <= rd_wdata;
-                if (rdId == 1) begin
-                    led_reg <= rd_wdata[7:0];
-                end
             end
 
             case (state)
                 FETCH: begin
-                    instruction <= memory[pc[4:2]];
+                    instruction <= memory[pc[11:2]];
                     state <= EXECUTE;
                 end
 
                 EXECUTE: begin
                     // Lógica de escritura para STORE
                     if (opcode == 7'b0100011 && funct3 == 3'b010) begin // SW
-                        memory[mem_access_addr[4:2]] <= rs2_data;
+                        memory[mem_access_addr[11:2]] <= rs2_data;
                     end
 
                     // Actualización del PC con lógica de control de flujo completa
@@ -153,7 +143,6 @@ module erc2_v_final (
                     end
                     state <= FETCH;
                 end
-
             endcase
         end
     end
@@ -161,6 +150,16 @@ module erc2_v_final (
     // --- Salida a LEDs ---
     reg [7:0] led_reg;
     assign led = led_reg;
+    localparam LED_ADDR = 32'h80000000;
+
+    // Lógica de I/O Mapeado en Memoria para los LEDs
+    always @(posedge clk_25mhz) begin
+        if (state == EXECUTE && opcode == 7'b0100011 && funct3 == 3'b010) begin // SW
+            if (mem_access_addr == LED_ADDR) begin
+                led_reg <= rs2_data[7:0];
+            end
+        end
+    end
 
     // Inicialización para simulación
     integer i;

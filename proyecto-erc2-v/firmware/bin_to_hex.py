@@ -2,8 +2,8 @@
 #
 # bin_to_hex.py
 #
-# Convierte un fichero binario raw a un formato de texto hexadecimal
-# que puede ser leído por la función $readmemh de Verilog.
+# Convierte un fichero binario raw (little-endian) a un formato de texto
+# hexadecimal limpio que $readmemh pueda entender de forma universal.
 
 import sys
 
@@ -18,19 +18,12 @@ def main():
     try:
         with open(input_path, 'rb') as f_in, open(output_path, 'w') as f_out:
             while True:
-                # Leer 4 bytes (una palabra de 32 bits)
                 word = f_in.read(4)
                 if not word:
-                    break # Fin del fichero
+                    break
                 
-                # Rellenar con ceros si es la última palabra y es incompleta
                 word = word.ljust(4, b'\x00')
-                
-                # El toolchain de RISC-V produce binarios en formato little-endian.
-                # Convertimos la palabra de 4 bytes a un entero.
                 val = int.from_bytes(word, 'little')
-                
-                # Escribimos el entero como un número hexadecimal de 8 dígitos (32 bits).
                 f_out.write(f'{val:08x}\n')
 
     except IOError as e:
@@ -39,3 +32,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
