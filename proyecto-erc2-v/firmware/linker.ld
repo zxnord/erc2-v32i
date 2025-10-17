@@ -15,6 +15,7 @@ SECTIONS
 {
   /* Sección de código */
   .text : {
+    *start.o(.text .text.*)  /* _start must be first */
     *(.text.init)
     *(.text .text.*)
   } > ram

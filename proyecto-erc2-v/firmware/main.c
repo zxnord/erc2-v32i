@@ -1,28 +1,58 @@
-/**
- * main.c: Programa de prueba en C para el procesador erc2-v
- *
- * Funcionalidad: Escribe un contador incremental en los LEDs
- * utilizando I/O mapeado en memoria.
- */
-
-// Definimos un puntero a la dirección de los LEDs (0x1000)
-// `volatile` evita que el compilador optimice el acceso.
-#define LED_REG (*(volatile unsigned int *)0x80000000)
-
-int main() {
-    unsigned int counter = 0;
+void main() {
+    volatile int *led_ptr = (int *)0x80000000;
+    int a = 0x12345678;
+    int b = 0x87654321;
+    int result;
 
     while (1) {
-        // Escribimos el valor del contador en el registro de los LEDs
-        LED_REG = counter;
+        // ADD
+        result = a + b;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
 
-        // Añadimos un pequeño retardo para que el parpadeo no sea demasiado
-        // rápido para el ojo humano. El valor exacto de este bucle
-        // dependerá de la velocidad final del procesador.
-        for (volatile int i = 0; i < 50000; ++i);
+        // SUB
+        result = a - b;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
 
-        counter++;
+        // AND
+        result = a & b;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // OR
+        result = a | b;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // XOR
+        result = a ^ b;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // SLL
+        result = a << 3;
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // SRL
+        result = (int)((unsigned int)a >> 3);
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // SRA
+        __asm__("srai %0, %1, 3" : "=r"(result) : "r"(a));
+        *led_ptr = result >> 24;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // SLT
+        result = (a < b) ? 1 : 0;
+        *led_ptr = result;
+        for (volatile int i = 0; i < 1000000; i++);
+
+        // SLTU
+        result = ((unsigned int)a < (unsigned int)b) ? 1 : 0;
+        *led_ptr = result;
+        for (volatile int i = 0; i < 1000000; i++);
     }
-
-    return 0; // No se debería llegar aquí
 }
