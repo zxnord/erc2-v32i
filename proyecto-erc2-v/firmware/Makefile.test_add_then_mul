@@ -1,22 +1,21 @@
-# Makefile para el firmware en C del procesador erc2-v
+# Makefile para el firmware en ASM del procesador erc2-v
 
 # --- Configuración del Compilador ---
 CROSS_COMPILE ?= riscv64-unknown-elf-
 
 # El nombre del binario final
-TARGET      = firmware
+TARGET      = test_add_then_mul
 
 # Herramientas
 CC = $(CROSS_COMPILE)gcc
 OBJCOPY = $(CROSS_COMPILE)objcopy
 
 # --- Ficheros Fuente ---
-SOURCES = main.c start.S
-OBJS = $(SOURCES:.c=.o)
-OBJS := $(OBJS:.S=.o)
+SOURCES = $(TARGET).S
+OBJS = $(TARGET).o
 
 # --- Opciones de Compilación ---
-CFLAGS = -march=rv32im -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
+CFLAGS = -march=rv32im -mabi=ilp32 -O2 -g -nostdlib -Tlinker.ld
 
 # --- Reglas del Makefile ---
 .PHONY: all clean
@@ -37,11 +36,9 @@ $(TARGET).elf: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
 # Reglas genéricas para compilar/ensamblar
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
 %.o: %.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Objetivo para limpiar los ficheros generados
 clean:
-	rm -f *.o *.elf *.bin *.hex
+	rm -f $(TARGET).o $(TARGET).elf $(TARGET).bin $(TARGET).hex

@@ -24,7 +24,7 @@ module soc(
 
     // Carga del programa desde firmware.hex
     initial begin
-        $readmemh("../firmware/firmware.hex", memory);
+        $readmemh("../firmware/test_add_then_mul.hex", memory);
     end
 
     // --- Interconexiones CPU <-> Memoria/Periféricos ---
@@ -40,8 +40,8 @@ module soc(
     procesador cpu (
         .clk(clk_25mhz),
         .reset(reset),
-        .instruction_in(instruction_out), // Puerto de instrucción
-        .mem_rdata_in(data_out),           // Puerto de datos
+        .instruction_in(instruction_out),
+        .mem_rdata_in(data_out),
         .instruction_address_out(instruction_address),
         .mem_address_out(data_address),
         .mem_wdata_out(data_wdata),

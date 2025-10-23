@@ -20,9 +20,10 @@ module procesador(
     reg [31:0] pc = 32'h00000000;
     reg [31:0] instruction_reg;
 
-    localparam FETCH     = 2'b00;
-    localparam EXECUTE   = 2'b01;
-    reg [1:0] state = FETCH;
+    localparam FETCH     = 3'b000;
+    localparam EXECUTE   = 3'b001;
+    localparam MUL_WAIT  = 3'b010;
+    reg [2:0] state = FETCH;
 
     // --- Decodificación (basada en la instrucción registrada) ---
     wire [6:0] opcode = instruction_reg[6:0];
@@ -48,28 +49,31 @@ module procesador(
     wire is_auipc     = (opcode == 7'b0010111);
     wire is_jalr      = (opcode == 7'b1100111);
     wire is_system    = (opcode == 7'b1110011);
+    wire is_mul       = (opcode == 7'b0110011 && funct3 == 3'b000 && funct7 == 7'b0000001);
 
-    // --- Lógica de Escritura en Registros ---
-    wire rd_wenable = is_alu_reg || is_alu_imm || is_lui || is_jal || is_load || is_auipc || is_jalr;
-
-    // --- Lógica de Forwarding ---
-    reg [4:0] prev_rdId_reg;
-    reg       prev_rd_wenable_reg;
-    reg [31:0] prev_rd_wdata_reg;
-
+    // --- Lectura de Registros (sin forwarding) ---
     wire [31:0] rs1_data = (rs1Id == 5'b0) ? 32'b0 : registers[rs1Id];
     wire [31:0] rs2_data = (rs2Id == 5'b0) ? 32'b0 : registers[rs2Id];
 
-    wire do_forward_rs1 = prev_rd_wenable_reg && (prev_rdId_reg != 0) && (prev_rdId_reg == rs1Id);
-    wire do_forward_rs2 = prev_rd_wenable_reg && (prev_rdId_reg != 0) && (prev_rdId_reg == rs2Id);
-
-    wire [31:0] forwarded_rs1_data = do_forward_rs1 ? prev_rd_wdata_reg : rs1_data;
-    wire [31:0] forwarded_rs2_data = do_forward_rs2 ? prev_rd_wdata_reg : rs2_data;
+    // --- Lógica de Salto Condicional (Branch) ---
+    reg branch_taken;
+    always @(*) begin
+        case (funct3)
+            3'b000: branch_taken = (rs1_data == rs2_data); // BEQ
+            3'b001: branch_taken = (rs1_data != rs2_data); // BNE
+            3'b100: branch_taken = ($signed(rs1_data) < $signed(rs2_data)); // BLT
+            3'b101: branch_taken = ($signed(rs1_data) >= $signed(rs2_data)); // BGE
+            3'b110: branch_taken = (rs1_data < rs2_data);     // BLTU
+            3'b111: branch_taken = (rs1_data >= rs2_data);    // BGEU
+            default: branch_taken = 1'b0;
+        endcase
+    end
 
     // --- ALU y Lógica de Escritura (Combinacional) ---
-    wire [31:0] alu_op2 = is_alu_reg ? forwarded_rs2_data : imm_i;
+    wire [31:0] alu_op2 = is_alu_reg ? rs2_data : imm_i;
     wire [4:0] shamt = alu_op2[4:0];
     reg [31:0] rd_wdata;
+    wire rd_wenable = is_alu_reg || is_alu_imm || is_lui || is_jal || is_load || is_auipc || is_jalr;
 
     always @(*) begin
         if (is_load) begin
@@ -77,42 +81,41 @@ module procesador(
         end else if (is_lui) begin
             rd_wdata = imm_u;
         end else if (is_auipc) begin
-            rd_wdata = (pc - 4) + imm_u;
+            rd_wdata = pc + imm_u;
         end else if (is_jal || is_jalr) begin
-            rd_wdata = pc;
+            rd_wdata = pc + 4;
         end else begin
             case (funct3)
-                3'b000: rd_wdata = (is_alu_reg && funct7[5]) ? (forwarded_rs1_data - alu_op2) : (forwarded_rs1_data + alu_op2);
-                3'b001: rd_wdata = forwarded_rs1_data << shamt;
-                3'b010: rd_wdata = ($signed(forwarded_rs1_data) < $signed(alu_op2)) ? 1 : 0;
-                3'b011: rd_wdata = (forwarded_rs1_data < alu_op2) ? 1 : 0;
-                3'b100: rd_wdata = forwarded_rs1_data ^ alu_op2;
-                3'b101: rd_wdata = funct7[5] ? ($signed(forwarded_rs1_data) >>> shamt) : (forwarded_rs1_data >> shamt);
-                3'b110: rd_wdata = forwarded_rs1_data | alu_op2;
-                3'b111: rd_wdata = forwarded_rs1_data & alu_op2;
+                3'b000: rd_wdata = (is_alu_reg && funct7[5]) ? (rs1_data - alu_op2) : (rs1_data + alu_op2);
+                3'b001: rd_wdata = rs1_data << shamt;
+                3'b010: rd_wdata = ($signed(rs1_data) < $signed(alu_op2)) ? 1 : 0;
+                3'b011: rd_wdata = (rs1_data < alu_op2) ? 1 : 0;
+                3'b100: rd_wdata = rs1_data ^ alu_op2;
+                3'b101: rd_wdata = funct7[5] ? ($signed(rs1_data) >>> shamt) : (rs1_data >> shamt);
+                3'b110: rd_wdata = rs1_data | alu_op2;
+                3'b111: rd_wdata = rs1_data & alu_op2;
                 default: rd_wdata = 32'b0;
             endcase
         end
     end
 
-    // --- Lógica de Salto Condicional (Branch) ---
-    reg branch_taken;
-    always @(*) begin
-        case (funct3)
-            3'b000: branch_taken = (forwarded_rs1_data == forwarded_rs2_data); // BEQ
-            3'b001: branch_taken = (forwarded_rs1_data != forwarded_rs2_data); // BNE
-            3'b100: branch_taken = ($signed(forwarded_rs1_data) < $signed(forwarded_rs2_data)); // BLT
-            3'b101: branch_taken = ($signed(forwarded_rs1_data) >= $signed(forwarded_rs2_data)); // BGE
-            3'b110: branch_taken = (forwarded_rs1_data < forwarded_rs2_data);     // BLTU
-            3'b111: branch_taken = (forwarded_rs1_data >= forwarded_rs2_data);    // BGEU
-            default: branch_taken = 1'b0;
-        endcase
-    end
+    // --- Instancia del Multiplicador ---
+    wire mul_busy;
+    wire [31:0] mul_result;
+    multiplier mul_unit (
+        .clk(clk),
+        .reset(reset),
+        .start(state == EXECUTE && is_mul),
+        .rs1_data(rs1_data),
+        .rs2_data(rs2_data),
+        .result(mul_result),
+        .busy(mul_busy)
+    );
 
     // --- Salidas a la Memoria/SoC ---
     assign instruction_address_out = pc;
-    assign mem_address_out   = forwarded_rs1_data + (is_load ? imm_i : imm_s);
-    assign mem_wdata_out     = forwarded_rs2_data;
+    assign mem_address_out   = rs1_data + (is_load ? imm_i : imm_s);
+    assign mem_wdata_out     = rs2_data;
     assign mem_wenable_out   = is_store && (funct3 == 3'b010); // SW
 
     // --- Lógica Secuencial Principal ---
@@ -121,7 +124,6 @@ module procesador(
             pc <= 32'h00000000;
             state <= FETCH;
             instruction_reg <= 32'h00000013; // NOP
-            prev_rd_wenable_reg <= 1'b0;
         end else begin
             case (state)
                 FETCH: begin
@@ -130,29 +132,36 @@ module procesador(
                 end
 
                 EXECUTE: begin
-                    // Escritura en el banco de registros
-                    if (rd_wenable && rdId != 0) begin
-                        registers[rdId] <= rd_wdata;
-                    end
-
-                    // Actualización de registros para forwarding
-                    prev_rdId_reg <= rdId;
-                    prev_rd_wenable_reg <= rd_wenable;
-                    prev_rd_wdata_reg <= rd_wdata;
-
-                    // Actualización del PC
-                    if (is_branch && branch_taken) begin
-                        pc <= pc + imm_b;
-                    end else if (is_jal) begin
-                        pc <= pc + imm_j;
-                    end else if (is_jalr) begin
-                        pc <= (forwarded_rs1_data + imm_i) & 32'hFFFFFFFE;
-                    end else if (is_system) begin
-                        pc <= pc; // Halt
+                    if (is_mul) begin
+                        state <= MUL_WAIT;
                     end else begin
-                        pc <= pc + 4;
+                        if (rd_wenable && rdId != 0) begin
+                            registers[rdId] <= rd_wdata;
+                        end
+
+                        if (is_branch && branch_taken) begin
+                            pc <= pc + imm_b;
+                        end else if (is_jal) begin
+                            pc <= pc + imm_j;
+                        end else if (is_jalr) begin
+                            pc <= (rs1_data + imm_i) & 32'hFFFFFFFE;
+                        end else if (is_system) begin
+                            pc <= pc; // Halt
+                        end else begin
+                            pc <= pc + 4;
+                        end
+                        state <= FETCH;
                     end
-                    state <= FETCH;
+                end
+
+                MUL_WAIT: begin
+                    if (!mul_busy) begin
+                        if (rdId != 0) begin
+                            registers[rdId] <= mul_result;
+                        end
+                        pc <= pc + 4;
+                        state <= FETCH;
+                    end
                 end
             endcase
         end
