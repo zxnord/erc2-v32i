@@ -1,0 +1,35 @@
+# Makefile for the 'test_div' firmware
+
+# --- Toolchain ---
+CC = riscv64-unknown-elf-gcc
+OBJCOPY = riscv64-unknown-elf-objcopy
+
+# --- Files ---
+TARGET = test_div
+SRC_S = $(TARGET).S
+LINKER_SCRIPT = linker.ld
+
+# --- Build Flags ---
+# Use rv32im for integer multiplication and division
+CFLAGS = -march=rv32im -mabi=ilp32 -O0 -nostdlib -T$(LINKER_SCRIPT)
+OBJCOPY_FLAGS = -O binary
+
+# --- Build Targets ---
+.PHONY: all clean
+
+all: $(TARGET).hex
+
+$(TARGET).o: $(SRC_S)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET).elf: $(TARGET).o
+	$(CC) $(CFLAGS) -o $@ $^
+
+$(TARGET).bin: $(TARGET).elf
+	$(OBJCOPY) $(OBJCOPY_FLAGS) $< $@
+
+$(TARGET).hex: $(TARGET).bin
+	python3 bin_to_hex.py $< $@
+
+clean:
+	rm -f *.o *.elf *.bin *.hex

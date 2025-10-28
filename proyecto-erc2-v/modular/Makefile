@@ -8,7 +8,7 @@ BOARD     = ulx3s
 
 # --- Ficheros Fuente ---
 # Ahora incluimos los 3 módulos de nuestro diseño
-VERILOG_FILES = soc.v procesador.v multiplier.v
+VERILOG_FILES = soc.v procesador.v multiplier.v divider.v
 LPF_FILE      = ulx3s.lpf
 
 # --- Ficheros de Salida ---

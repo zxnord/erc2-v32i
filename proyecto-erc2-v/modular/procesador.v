@@ -20,10 +20,12 @@ module procesador(
     reg [31:0] pc = 32'h00000000;
     reg [31:0] instruction_reg;
 
-    localparam FETCH     = 3'b000;
-    localparam EXECUTE   = 3'b001;
-    localparam MUL_WAIT  = 3'b010;
-    reg [2:0] state = FETCH;
+    localparam FETCH     = 2'b00;
+    localparam EXECUTE   = 2'b01;
+    localparam MUL_WAIT  = 2'b10;
+    localparam DIV_WAIT  = 2'b11;
+    reg [1:0] state = FETCH;
+    reg [2:0] funct3_reg;
 
     // --- Decodificación (basada en la instrucción registrada) ---
     wire [6:0] opcode = instruction_reg[6:0];
@@ -38,11 +40,11 @@ module procesador(
     wire [31:0] imm_b = {{20{instruction_reg[31]}}, instruction_reg[7], instruction_reg[30:25], instruction_reg[11:8], 1'b0};
     wire [31:0] imm_s = {{21{instruction_reg[31]}}, instruction_reg[30:25], instruction_reg[11:7]};
 
-    // --- Tipos de Instrucción ---
+    // --- Tipos de Instrucción (CORREGIDO) ---
     wire is_load      = (opcode == 7'b0000011);
     wire is_store     = (opcode == 7'b0100011);
     wire is_alu_imm   = (opcode == 7'b0010011);
-    wire is_alu_reg   = (opcode == 7'b0110011);
+    wire is_alu_reg   = (opcode == 7'b0110011) && (funct7 == 7'b0000000 || funct7 == 7'b0100000);
     wire is_lui       = (opcode == 7'b0110111);
     wire is_jal       = (opcode == 7'b1101111);
     wire is_branch    = (opcode == 7'b1100011);
@@ -50,12 +52,13 @@ module procesador(
     wire is_jalr      = (opcode == 7'b1100111);
     wire is_system    = (opcode == 7'b1110011);
     wire is_mul       = (opcode == 7'b0110011 && funct3 == 3'b000 && funct7 == 7'b0000001);
+    wire is_div_rem   = (opcode == 7'b0110011 && funct7 == 7'b0000001 && funct3[2]);
 
-    // --- Lectura de Registros (sin forwarding) ---
+    // --- Lectura de Registros ---
     wire [31:0] rs1_data = (rs1Id == 5'b0) ? 32'b0 : registers[rs1Id];
     wire [31:0] rs2_data = (rs2Id == 5'b0) ? 32'b0 : registers[rs2Id];
 
-    // --- Lógica de Salto Condicional (Branch) ---
+    // --- Lógica de Salto Condicional ---
     reg branch_taken;
     always @(*) begin
         case (funct3)
@@ -69,22 +72,18 @@ module procesador(
         endcase
     end
 
-    // --- ALU y Lógica de Escritura (Combinacional) ---
+    // --- ALU y Lógica de Escritura ---
     wire [31:0] alu_op2 = is_alu_reg ? rs2_data : imm_i;
     wire [4:0] shamt = alu_op2[4:0];
     reg [31:0] rd_wdata;
     wire rd_wenable = is_alu_reg || is_alu_imm || is_lui || is_jal || is_load || is_auipc || is_jalr;
 
     always @(*) begin
-        if (is_load) begin
-            rd_wdata = mem_rdata_in;
-        end else if (is_lui) begin
-            rd_wdata = imm_u;
-        end else if (is_auipc) begin
-            rd_wdata = pc + imm_u;
-        end else if (is_jal || is_jalr) begin
-            rd_wdata = pc + 4;
-        end else begin
+        if (is_load) rd_wdata = mem_rdata_in;
+        else if (is_lui) rd_wdata = imm_u;
+        else if (is_auipc) rd_wdata = pc + imm_u;
+        else if (is_jal || is_jalr) rd_wdata = pc + 4;
+        else begin
             case (funct3)
                 3'b000: rd_wdata = (is_alu_reg && funct7[5]) ? (rs1_data - alu_op2) : (rs1_data + alu_op2);
                 3'b001: rd_wdata = rs1_data << shamt;
@@ -99,18 +98,11 @@ module procesador(
         end
     end
 
-    // --- Instancia del Multiplicador ---
-    wire mul_busy;
-    wire [31:0] mul_result;
-    multiplier mul_unit (
-        .clk(clk),
-        .reset(reset),
-        .start(state == EXECUTE && is_mul),
-        .rs1_data(rs1_data),
-        .rs2_data(rs2_data),
-        .result(mul_result),
-        .busy(mul_busy)
-    );
+    // --- Instancias de Multiplicador y Divisor ---
+    wire mul_busy, div_busy;
+    wire [31:0] mul_result, div_quotient, div_remainder;
+    multiplier mul_unit ( .clk(clk), .reset(reset), .start(state == EXECUTE && is_mul), .rs1_data(rs1_data), .rs2_data(rs2_data), .result(mul_result), .busy(mul_busy) );
+    divider div_unit ( .clk(clk), .reset(reset), .start(state == EXECUTE && is_div_rem), .dividend(rs1_data), .divisor(rs2_data), .quotient_out(div_quotient), .remainder_out(div_remainder), .busy(div_busy) );
 
     // --- Salidas a la Memoria/SoC ---
     assign instruction_address_out = pc;
@@ -130,38 +122,41 @@ module procesador(
                     instruction_reg <= instruction_in;
                     state <= EXECUTE;
                 end
-
                 EXECUTE: begin
-                    if (is_mul) begin
-                        state <= MUL_WAIT;
-                    end else begin
-                        if (rd_wenable && rdId != 0) begin
-                            registers[rdId] <= rd_wdata;
-                        end
-
-                        if (is_branch && branch_taken) begin
-                            pc <= pc + imm_b;
-                        end else if (is_jal) begin
-                            pc <= pc + imm_j;
-                        end else if (is_jalr) begin
-                            pc <= (rs1_data + imm_i) & 32'hFFFFFFFE;
-                        end else if (is_system) begin
-                            pc <= pc; // Halt
-                        end else begin
-                            pc <= pc + 4;
-                        end
+                    if (is_mul) state <= MUL_WAIT;
+                    else if (is_div_rem) begin
+                        funct3_reg <= funct3;
+                        state <= DIV_WAIT;
+                    end
+                    else begin
+                        if (rd_wenable && rdId != 0) registers[rdId] <= rd_wdata;
+                        if (is_branch && branch_taken) pc <= pc + imm_b;
+                        else if (is_jal) pc <= pc + imm_j;
+                        else if (is_jalr) pc <= (rs1_data + imm_i) & 32'hFFFFFFFE;
+                        else if (is_system) pc <= pc; // Halt
+                        else pc <= pc + 4;
                         state <= FETCH;
                     end
                 end
-
                 MUL_WAIT: begin
                     if (!mul_busy) begin
+                        if (rdId != 0) registers[rdId] <= mul_result;
+                        pc <= pc + 4;
+                        state <= FETCH;
+                    end
+                end
+                DIV_WAIT: begin
+                    if (!div_busy) begin
                         if (rdId != 0) begin
-                            registers[rdId] <= mul_result;
+                            if (funct3_reg[1]) registers[rdId] <= div_remainder; // REM, REMU
+                            else registers[rdId] <= div_quotient; // DIV, DIVU
                         end
                         pc <= pc + 4;
                         state <= FETCH;
                     end
+                end
+                default: begin
+                    state <= FETCH;
                 end
             endcase
         end

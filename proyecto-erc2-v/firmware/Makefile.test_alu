@@ -1,0 +1,47 @@
+# Makefile para el firmware en C del procesador erc2-v
+
+# --- Configuración del Compilador ---
+CROSS_COMPILE ?= riscv64-unknown-elf-
+
+# El nombre del binario final
+TARGET      = test_alu
+
+# Herramientas
+CC = $(CROSS_COMPILE)gcc
+OBJCOPY = $(CROSS_COMPILE)objcopy
+
+# --- Ficheros Fuente ---
+SOURCES = $(TARGET).c start.S
+OBJS = $(SOURCES:.c=.o)
+OBJS := $(OBJS:.S=.o)
+
+# --- Opciones de Compilación ---
+CFLAGS = -march=rv32im -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
+
+# --- Reglas del Makefile ---
+.PHONY: all clean
+
+# El objetivo por defecto es construir el fichero .hex
+all: $(TARGET).hex
+
+# Regla para convertir el binario a formato Verilog HEX limpio
+$(TARGET).hex: $(TARGET).bin
+	python3 bin_to_hex.py $< $@
+
+# Regla para extraer el binario raw del fichero ELF
+$(TARGET).bin: $(TARGET).elf
+	$(OBJCOPY) -O binary $^ $@
+
+# Regla para enlazar los objetos y crear el ELF final
+$(TARGET).elf: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS)
+
+# Reglas genéricas para compilar/ensamblar
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+%.o: %.S
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Objetivo para limpiar los ficheros generados
+clean:
+	rm -f $(TARGET).o $(TARGET).elf $(TARGET).bin $(TARGET).hex
