@@ -4,19 +4,18 @@
 CROSS_COMPILE ?= riscv64-unknown-elf-
 
 # El nombre del binario final
-TARGET      = firmware
+TARGET      = test_atomic_full
 
 # Herramientas
 CC = $(CROSS_COMPILE)gcc
 OBJCOPY = $(CROSS_COMPILE)objcopy
 
 # --- Ficheros Fuente ---
-SOURCES = main.c start.S
-OBJS = $(SOURCES:.c=.o)
-OBJS := $(OBJS:.S=.o)
+SOURCES = test_atomic_full.S
+OBJS = $(SOURCES:.S=.o)
 
 # --- Opciones de Compilación ---
-CFLAGS = -march=rv32ima -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
+CFLAGS = -march=rv32ia -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
 
 # --- Reglas del Makefile ---
 .PHONY: all clean
@@ -37,8 +36,6 @@ $(TARGET).elf: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
 # Reglas genéricas para compilar/ensamblar
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
 %.o: %.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 

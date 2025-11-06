@@ -20,12 +20,22 @@ module procesador(
     reg [31:0] pc = 32'h00000000;
     reg [31:0] instruction_reg;
 
-    localparam FETCH     = 2'b00;
-    localparam EXECUTE   = 2'b01;
-    localparam MUL_WAIT  = 2'b10;
-    localparam DIV_WAIT  = 2'b11;
-    reg [1:0] state = FETCH;
+    localparam FETCH     = 3'b000;
+    localparam EXECUTE   = 3'b001;
+    localparam MUL_WAIT  = 3'b010;
+    localparam DIV_WAIT  = 3'b011;
+    localparam ATOMIC    = 3'b100;
+    reg [2:0] state = FETCH;
     reg [2:0] funct3_reg;
+
+    // --- Reservation Station para LR/SC ---
+    reg [31:0] reservation_addr;
+    reg reservation_valid = 1'b0;
+
+    // --- Atomic Operation Registers ---
+    reg [31:0] atomic_mem_data; // Stores memory value read in ATOMIC state
+    reg [31:0] atomic_addr;     // Stores address for atomic operation
+    reg sc_write_enable;        // Indicates SC.W should write
 
     // --- Decodificación (basada en la instrucción registrada) ---
     wire [6:0] opcode = instruction_reg[6:0];
@@ -53,6 +63,20 @@ module procesador(
     wire is_system    = (opcode == 7'b1110011);
     wire is_mul       = (opcode == 7'b0110011 && funct3 == 3'b000 && funct7 == 7'b0000001);
     wire is_div_rem   = (opcode == 7'b0110011 && funct7 == 7'b0000001 && funct3[2]);
+
+    // --- A Extension (Atomic) Instructions ---
+    wire is_atomic    = (opcode == 7'b0101111) && (funct3 == 3'b010); // AMO.W
+    wire is_lr        = is_atomic && (funct7[6:2] == 5'b00010);
+    wire is_sc        = is_atomic && (funct7[6:2] == 5'b00011);
+    wire is_amoswap   = is_atomic && (funct7[6:2] == 5'b00001);
+    wire is_amoadd    = is_atomic && (funct7[6:2] == 5'b00000);
+    wire is_amoxor    = is_atomic && (funct7[6:2] == 5'b00100);
+    wire is_amoand    = is_atomic && (funct7[6:2] == 5'b01100);
+    wire is_amoor     = is_atomic && (funct7[6:2] == 5'b01000);
+    wire is_amomin    = is_atomic && (funct7[6:2] == 5'b10000);
+    wire is_amomax    = is_atomic && (funct7[6:2] == 5'b10100);
+    wire is_amominu   = is_atomic && (funct7[6:2] == 5'b11000);
+    wire is_amomaxu   = is_atomic && (funct7[6:2] == 5'b11100);
 
     // --- Lectura de Registros ---
     wire [31:0] rs1_data = (rs1Id == 5'b0) ? 32'b0 : registers[rs1Id];
@@ -98,6 +122,21 @@ module procesador(
         end
     end
 
+    // --- AMO Operation Computation ---
+    reg [31:0] amo_result;
+    always @(*) begin
+        if (is_amoswap) amo_result = rs2_data;
+        else if (is_amoadd) amo_result = atomic_mem_data + rs2_data;
+        else if (is_amoxor) amo_result = atomic_mem_data ^ rs2_data;
+        else if (is_amoand) amo_result = atomic_mem_data & rs2_data;
+        else if (is_amoor) amo_result = atomic_mem_data | rs2_data;
+        else if (is_amomin) amo_result = ($signed(atomic_mem_data) < $signed(rs2_data)) ? atomic_mem_data : rs2_data;
+        else if (is_amomax) amo_result = ($signed(atomic_mem_data) > $signed(rs2_data)) ? atomic_mem_data : rs2_data;
+        else if (is_amominu) amo_result = (atomic_mem_data < rs2_data) ? atomic_mem_data : rs2_data;
+        else if (is_amomaxu) amo_result = (atomic_mem_data > rs2_data) ? atomic_mem_data : rs2_data;
+        else amo_result = atomic_mem_data;
+    end
+
     // --- Instancias de Multiplicador y Divisor ---
     wire mul_busy, div_busy;
     wire [31:0] mul_result, div_quotient, div_remainder;
@@ -106,9 +145,11 @@ module procesador(
 
     // --- Salidas a la Memoria/SoC ---
     assign instruction_address_out = pc;
-    assign mem_address_out   = rs1_data + (is_load ? imm_i : imm_s);
-    assign mem_wdata_out     = rs2_data;
-    assign mem_wenable_out   = is_store && (funct3 == 3'b010); // SW
+    assign mem_address_out   = (state == ATOMIC) ? atomic_addr : 
+                                (is_atomic ? rs1_data : 
+                                (rs1_data + (is_load ? imm_i : imm_s)));
+    assign mem_wdata_out     = (state == ATOMIC) ? amo_result : rs2_data;
+    assign mem_wenable_out   = ((is_store && (funct3 == 3'b010)) || (state == ATOMIC) || sc_write_enable); // SW, atomic write, or SC.W
 
     // --- Lógica Secuencial Principal ---
     always @(posedge clk or posedge reset) begin
@@ -116,7 +157,15 @@ module procesador(
             pc <= 32'h00000000;
             state <= FETCH;
             instruction_reg <= 32'h00000013; // NOP
+            sc_write_enable <= 1'b0;
+            reservation_valid <= 1'b0;
         end else begin
+            // Invalidate reservation if a store occurs to the reserved address
+            if (mem_wenable_out && !sc_write_enable && reservation_valid && (mem_address_out == reservation_addr)) begin
+                reservation_valid <= 1'b0;
+            end
+
+            sc_write_enable <= 1'b0; // Default: no SC write
             case (state)
                 FETCH: begin
                     instruction_reg <= instruction_in;
@@ -127,6 +176,34 @@ module procesador(
                     else if (is_div_rem) begin
                         funct3_reg <= funct3;
                         state <= DIV_WAIT;
+                    end
+                    else if (is_lr) begin
+                        // LR.W: Load reserved - read memory and set reservation
+                        if (rdId != 0) registers[rdId] <= mem_rdata_in;
+                        reservation_addr <= rs1_data;
+                        reservation_valid <= 1'b1;
+                        pc <= pc + 4;
+                        state <= FETCH;
+                    end
+                    else if (is_sc) begin
+                        // SC.W: Store conditional - succeed if reservation matches
+                        if (reservation_valid && (reservation_addr == rs1_data)) begin
+                            // Success: write to memory, return 0 in rd
+                            if (rdId != 0) registers[rdId] <= 32'h00000000;
+                            sc_write_enable <= 1'b1; // Enable write for this cycle
+                            reservation_valid <= 1'b0;
+                        end else begin
+                            // Failure: don't write, return 1 in rd
+                            if (rdId != 0) registers[rdId] <= 32'h00000001;
+                        end
+                        pc <= pc + 4;
+                        state <= FETCH;
+                    end
+                    else if (is_atomic && !is_lr && !is_sc) begin
+                        // AMO operations: enter ATOMIC state for read-modify-write
+                        atomic_addr <= rs1_data;
+                        atomic_mem_data <= mem_rdata_in; // Read current memory value
+                        state <= ATOMIC;
                     end
                     else begin
                         if (rd_wenable && rdId != 0) registers[rdId] <= rd_wdata;
@@ -154,6 +231,14 @@ module procesador(
                         pc <= pc + 4;
                         state <= FETCH;
                     end
+                end
+                ATOMIC: begin
+                    // AMO: Write computed value back, return original value to rd
+                    if (rdId != 0) registers[rdId] <= atomic_mem_data;
+                    // Clear reservation on any atomic operation to maintain SC semantics
+                    reservation_valid <= 1'b0;
+                    pc <= pc + 4;
+                    state <= FETCH;
                 end
                 default: begin
                     state <= FETCH;
