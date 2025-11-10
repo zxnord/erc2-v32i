@@ -20,11 +20,16 @@ module procesador(
     reg [31:0] pc = 32'h00000000;
     reg [31:0] instruction_reg;
 
+    reg [1:0] priv_mode; // 00: U-mode, 01: S-mode, 11: M-mode
+
     localparam FETCH     = 3'b000;
     localparam EXECUTE   = 3'b001;
     localparam MUL_WAIT  = 3'b010;
     localparam DIV_WAIT  = 3'b011;
     localparam ATOMIC    = 3'b100;
+    localparam EXCEPTION = 3'b101;
+    localparam CSR_WRITE = 3'b110;
+    localparam CSR_STALL = 3'b111;
     reg [2:0] state = FETCH;
     reg [2:0] funct3_reg;
 
@@ -36,6 +41,37 @@ module procesador(
     reg [31:0] atomic_mem_data; // Stores memory value read in ATOMIC state
     reg [31:0] atomic_addr;     // Stores address for atomic operation
     reg sc_write_enable;        // Indicates SC.W should write
+
+    reg [31:0] csr_rdata_reg;
+    reg [4:0] exception_cause_reg;
+    reg exception_taken_reg;
+
+    // --- CSR Registers ---
+    reg [31:0] sstatus_reg;
+    reg [31:0] sepc_reg;
+    reg [31:0] scause_reg;
+    reg [31:0] stvec_reg;
+    reg [31:0] satp_reg;
+    reg [31:0] stval_reg;
+
+    // --- M-mode CSR Registers ---
+    reg [31:0] mstatus_reg;
+    reg [31:0] mepc_reg;
+    reg [31:0] mcause_reg;
+    reg [31:0] mtvec_reg;
+    reg [31:0] mtval_reg;
+
+    // --- Custom CSRs for TLB Management ---
+    reg [31:0] tlb_vpn_reg;
+    reg [31:0] tlb_ppn_perms_reg;
+    reg [31:0] tlb_write_index_reg;
+
+    // Connect CSR regs to the wires feeding the MMUs
+    assign tlb_vpn_in = tlb_vpn_reg;
+    assign tlb_ppn_perms = tlb_ppn_perms_reg;
+    assign tlb_write_index = tlb_write_index_reg;
+
+    wire csr_we;
 
     // --- Decodificación (basada en la instrucción registrada) ---
     wire [6:0] opcode = instruction_reg[6:0];
@@ -63,6 +99,45 @@ module procesador(
     wire is_system    = (opcode == 7'b1110011);
     wire is_mul       = (opcode == 7'b0110011 && funct3 == 3'b000 && funct7 == 7'b0000001);
     wire is_div_rem   = (opcode == 7'b0110011 && funct7 == 7'b0000001 && funct3[2]);
+
+    wire is_system = (opcode == 7'b1110011);
+    wire [11:0] funct12 = instruction_reg[31:20];
+    wire is_ecall = is_system && (funct12 == 12'h000) && (funct3 == 3'b000);
+    wire is_ebreak = is_system && (funct12 == 12'h001) && (funct3 == 3'b000);
+    wire is_sret = is_system && (funct12 == 12'h102) && (funct3 == 3'b000);
+    wire is_mret = is_system && (funct12 == 12'h302) && (funct3 == 3'b000);
+    wire is_csr = is_system && !is_ecall && !is_ebreak && !is_sret && !is_mret;
+
+    wire is_illegal = !is_load && !is_store && !is_alu_imm && !is_alu_reg && !is_lui && !is_jal && !is_branch && !is_auipc && !is_jalr && !is_system && !is_atomic;
+
+    // --- CSR Logic ---
+    wire [11:0] csr_addr = instruction_reg[31:20];
+    wire [31:0] csr_rdata = // S-mode CSRs
+                          (csr_addr == 12'h100) ? sstatus_reg :
+                          (csr_addr == 12'h141) ? sepc_reg :
+                          (csr_addr == 12'h142) ? scause_reg :
+                          (csr_addr == 12'h105) ? stvec_reg :
+                          (csr_addr == 12'h180) ? satp_reg :
+                          (csr_addr == 12'h143) ? stval_reg :
+                          // M-mode CSRs
+                          (csr_addr == 12'h300) ? mstatus_reg :
+                          (csr_addr == 12'h341) ? mepc_reg :
+                          (csr_addr == 12'h342) ? mcause_reg :
+                          (csr_addr == 12'h305) ? mtvec_reg :
+                          (csr_addr == 12'h343) ? mtval_reg :
+                          // Custom TLB CSRs
+                          (csr_addr == 12'h7C0) ? tlb_vpn_reg :
+                          (csr_addr == 12'h7C1) ? tlb_ppn_perms_reg :
+                          (csr_addr == 12'h7C2) ? tlb_write_index_reg :
+                          32'h0;
+
+    wire [31:0] csr_wdata_calculated = (funct3 == 3'b001) ? rs1_data :
+                                     (funct3 == 3'b010) ? (csr_rdata_reg | rs1_data) :
+                                     (funct3 == 3'b011) ? (csr_rdata_reg & ~rs1_data) :
+                                     (funct3 == 3'b101) ? {27'b0, rs1Id} :
+                                     (funct3 == 3'b110) ? (csr_rdata_reg | {27'b0, rs1Id}) :
+                                     (funct3 == 3'b111) ? (csr_rdata_reg & ~{27'b0, rs1Id}) :
+                                     32'h0;
 
     // --- A Extension (Atomic) Instructions ---
     wire is_atomic    = (opcode == 7'b0101111) && (funct3 == 3'b010); // AMO.W
@@ -143,13 +218,61 @@ module procesador(
     multiplier mul_unit ( .clk(clk), .reset(reset), .start(state == EXECUTE && is_mul), .rs1_data(rs1_data), .rs2_data(rs2_data), .result(mul_result), .busy(mul_busy) );
     divider div_unit ( .clk(clk), .reset(reset), .start(state == EXECUTE && is_div_rem), .dividend(rs1_data), .divisor(rs2_data), .quotient_out(div_quotient), .remainder_out(div_remainder), .busy(div_busy) );
 
+    // --- MMU ---
+    wire mmu_enable = ((satp_reg >> 31) & 1) && (priv_mode != 2'b11); // MMU enabled if satp.MODE is not bare AND we are in S-mode or U-mode
+
+    wire [31:0] data_virt_addr = (state == ATOMIC) ? atomic_addr :
+                                 (is_atomic ? rs1_data :
+                                 (rs1_data + (is_load ? imm_i : imm_s)));
+
+    wire [31:0] instr_phys_addr;
+    wire [31:0] data_phys_addr;
+    wire        instr_tlb_hit;
+    wire        data_tlb_hit;
+    wire        instr_tlb_miss;
+    wire        data_tlb_miss;
+
+    // TLB write ports - will be connected to CSRs later
+    wire [31:0] tlb_vpn_in;
+    wire [31:0] tlb_ppn_perms;
+    wire [31:0] tlb_write_index;
+
+    mmu i_mmu (
+        .clk(clk),
+        .reset(reset),
+        .virt_addr(pc),
+        .phys_addr(instr_phys_addr),
+        .satp(satp_reg),
+        .mmu_enable(mmu_enable),
+        .tlb_hit(instr_tlb_hit),
+        .tlb_miss(instr_tlb_miss),
+        .tlb_vpn_in(tlb_vpn_in),
+        .tlb_ppn_perms(tlb_ppn_perms),
+        .tlb_write_index(tlb_write_index)
+    );
+
+    mmu d_mmu (
+        .clk(clk),
+        .reset(reset),
+        .virt_addr(data_virt_addr),
+        .phys_addr(data_phys_addr),
+        .satp(satp_reg),
+        .mmu_enable(mmu_enable),
+        .tlb_hit(data_tlb_hit),
+        .tlb_miss(data_tlb_miss),
+        .tlb_vpn_in(tlb_vpn_in),
+        .tlb_ppn_perms(tlb_ppn_perms),
+        .tlb_write_index(tlb_write_index)
+    );
+
+
     // --- Salidas a la Memoria/SoC ---
-    assign instruction_address_out = pc;
-    assign mem_address_out   = (state == ATOMIC) ? atomic_addr : 
-                                (is_atomic ? rs1_data : 
-                                (rs1_data + (is_load ? imm_i : imm_s)));
+    assign instruction_address_out = instr_phys_addr;
+    assign mem_address_out   = data_phys_addr;
     assign mem_wdata_out     = (state == ATOMIC) ? amo_result : rs2_data;
     assign mem_wenable_out   = ((is_store && (funct3 == 3'b010)) || (state == ATOMIC) || sc_write_enable); // SW, atomic write, or SC.W
+
+    assign csr_we = (state == CSR_WRITE);
 
     // --- Lógica Secuencial Principal ---
     always @(posedge clk or posedge reset) begin
@@ -158,7 +281,20 @@ module procesador(
             state <= FETCH;
             instruction_reg <= 32'h00000013; // NOP
             sc_write_enable <= 1'b0;
+            priv_mode <= 2'b11; // M-mode
             reservation_valid <= 1'b0;
+            sstatus_reg <= 32'h0;
+            sepc_reg <= 32'h0;
+            scause_reg <= 32'h0;
+            stvec_reg <= 32'h0;
+            satp_reg <= 32'h0;
+            stval_reg <= 32'h0;
+            // M-mode CSRs
+            mstatus_reg <= 32'h0;
+            mepc_reg <= 32'h0;
+            mcause_reg <= 32'h0;
+            mtvec_reg <= 32'h0;
+            mtval_reg <= 32'h0;
         end else begin
             // Invalidate reservation if a store occurs to the reserved address
             if (mem_wenable_out && !sc_write_enable && reservation_valid && (mem_address_out == reservation_addr)) begin
@@ -172,7 +308,23 @@ module procesador(
                     state <= EXECUTE;
                 end
                 EXECUTE: begin
-                    if (is_mul) state <= MUL_WAIT;
+                    if (mmu_enable && instr_tlb_miss) begin
+                        exception_cause_reg <= 12; // Instruction page fault
+                        exception_taken_reg <= 1'b1;
+                        state <= EXCEPTION;
+                    end else if (mmu_enable && is_load && data_tlb_miss) begin
+                        exception_cause_reg <= 13; // Load page fault
+                        exception_taken_reg <= 1'b1;
+                        state <= EXCEPTION;
+                    end else if (mmu_enable && is_store && data_tlb_miss) begin
+                        exception_cause_reg <= 15; // Store page fault
+                        exception_taken_reg <= 1'b1;
+                        state <= EXCEPTION;
+                    end else if (is_illegal) begin
+                        exception_cause_reg <= 2;
+                        exception_taken_reg <= 1'b1;
+                        state <= EXCEPTION;
+                    end else if (is_mul) state <= MUL_WAIT;
                     else if (is_div_rem) begin
                         funct3_reg <= funct3;
                         state <= DIV_WAIT;
@@ -210,9 +362,36 @@ module procesador(
                         if (is_branch && branch_taken) pc <= pc + imm_b;
                         else if (is_jal) pc <= pc + imm_j;
                         else if (is_jalr) pc <= (rs1_data + imm_i) & 32'hFFFFFFFE;
-                        else if (is_system) pc <= pc; // Halt
-                        else pc <= pc + 4;
-                        state <= FETCH;
+                        else if (is_system) begin
+                            if (is_csr) begin
+                                csr_rdata_reg <= csr_rdata;
+                                state <= CSR_WRITE;
+                            end else if (is_ecall) begin
+                                exception_cause_reg <= 8;
+                                exception_taken_reg <= 1'b1;
+                                state <= EXCEPTION;
+                            end else if (is_ebreak) begin
+                                exception_cause_reg <= 3;
+                                exception_taken_reg <= 1'b1;
+                                state <= EXCEPTION;
+                            end else if (is_mret) begin
+                                // Return from M-mode trap
+                                pc <= mepc_reg;
+                                priv_mode <= mstatus_reg[12:11]; // Restore privilege from mstatus.MPP
+                                state <= FETCH;
+                            end else if (is_sret) begin
+                                pc <= sepc_reg;
+                                priv_mode <= sstatus_reg[9:8]; // sstatus.SPP
+                                state <= FETCH;
+                            end else begin
+                                exception_cause_reg <= 2;
+                                exception_taken_reg <= 1'b1;
+                                state <= EXCEPTION;
+                            end
+                        end else begin
+                            pc <= pc + 4;
+                            state <= FETCH;
+                        end
                     end
                 end
                 MUL_WAIT: begin
@@ -237,6 +416,49 @@ module procesador(
                     if (rdId != 0) registers[rdId] <= atomic_mem_data;
                     // Clear reservation on any atomic operation to maintain SC semantics
                     reservation_valid <= 1'b0;
+                    pc <= pc + 4;
+                    state <= FETCH;
+                end
+                EXCEPTION: begin
+                    // Trap to M-mode
+                    mepc_reg <= pc;
+                    mcause_reg <= {1'b0, 27'b0, exception_cause_reg}; // For now, no interrupts
+                    mtval_reg <= pc; // For now, store faulting PC. A real implementation might store faulting address.
+
+                    // Save current privilege in mstatus.MPP (bits 12:11)
+                    // and prepare for M-mode
+                    mstatus_reg[12:11] <= priv_mode;
+
+                    priv_mode <= 2'b11; // Enter M-mode
+                    pc <= mtvec_reg;    // Jump to M-mode trap handler
+                    state <= FETCH;
+                end
+                CSR_WRITE: begin
+                    if (rdId != 0) registers[rdId] <= csr_rdata_reg;
+                    if (!((funct3 == 3'b010 || funct3 == 3'b011) && rs1Id == 5'b0)) begin
+                        case (csr_addr)
+                            // S-mode
+                            12'h100: sstatus_reg <= csr_wdata_calculated;
+                            12'h141: sepc_reg    <= csr_wdata_calculated;
+                            12'h142: scause_reg  <= csr_wdata_calculated;
+                            12'h105: stvec_reg   <= csr_wdata_calculated;
+                            12'h180: satp_reg    <= csr_wdata_calculated;
+                            12'h143: stval_reg   <= csr_wdata_calculated;
+                            // M-mode
+                            12'h300: mstatus_reg <= csr_wdata_calculated;
+                            12'h341: mepc_reg    <= csr_wdata_calculated;
+                            12'h342: mcause_reg  <= csr_wdata_calculated;
+                            12'h305: mtvec_reg   <= csr_wdata_calculated;
+                            12'h343: mtval_reg   <= csr_wdata_calculated;
+                            // Custom TLB CSRs
+                            12'h7C0: tlb_vpn_reg <= csr_wdata_calculated;
+                            12'h7C1: tlb_ppn_perms_reg <= csr_wdata_calculated;
+                            12'h7C2: tlb_write_index_reg <= csr_wdata_calculated;
+                        endcase
+                    end
+                    state <= CSR_STALL;
+                end
+                CSR_STALL: begin
                     pc <= pc + 4;
                     state <= FETCH;
                 end

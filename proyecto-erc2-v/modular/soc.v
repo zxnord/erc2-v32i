@@ -18,7 +18,7 @@ module soc(
 
     // Carga del programa desde firmware.hex
     initial begin
-        $readmemh("../firmware/firmware.hex", memory);
+        $readmemh("../firmware/test_tlb.hex", memory);
     end
 
     // --- Interconexiones CPU <-> Memoria/Periféricos ---
