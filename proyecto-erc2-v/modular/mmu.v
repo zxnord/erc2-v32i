@@ -1,93 +1,129 @@
+// Sequential, multi-cycle TLB lookup MMU
+// This is a debugging version. It is slow but simple.
 `default_nettype none
 
-module mmu (
-    input wire clk,
-    input wire reset,
+module mmu(
+    input  wire clk,
+    input  wire reset,
 
-    // Interface with processor
-    input wire [31:0] virt_addr,
-    output wire [31:0] phys_addr,
+    // CPU Interface
+    input  wire        start_lookup, // Pulse to start a new lookup
+    input  wire [31:0] virt_addr,
+    output reg [31:0] phys_addr,
+    output reg         lookup_done,  // High for one cycle when lookup is complete
+    output reg         tlb_hit,
+    output reg         tlb_miss,
 
-    // Interface with satp register
+    // SATP from CPU
     input wire [31:0] satp,
 
-    // MMU control
-    input wire mmu_enable,
-
-    // TLB outputs
-    output wire tlb_hit,
-    output wire tlb_miss,
-
-    // TLB write interface
+    // TLB Write Interface (from CSRs)
     input wire [31:0] tlb_vpn_in,
-    input wire [31:0] tlb_ppn_perms,
+    input wire [31:0] tlb_ppn_perms_in,
     input wire [31:0] tlb_write_index
 );
 
-    localparam TLB_ENTRIES = 4;
+    localparam TLB_ENTRIES = 16;
 
-    // TLB Entry: {valid, vpn, ppn, permissions}
-    reg [TLB_ENTRIES-1:0] tlb_valid;
-    reg [19:0] tlb_vpn [0:TLB_ENTRIES-1];
-    reg [19:0] tlb_ppn [0:TLB_ENTRIES-1];
-    reg [2:0] tlb_perms [0:TLB_ENTRIES-1]; // R, W, X
+    // --- TLB Storage ---
+    reg [31:0] tlb_vpn [0:TLB_ENTRIES-1];
+    reg [31:0] tlb_ppn_perms [0:TLB_ENTRIES-1];
+    reg tlb_valid [0:TLB_ENTRIES-1];
 
+    // --- MMU FSM ---
+    localparam IDLE   = 2'd0;
+    localparam LOOKUP = 2'd1;
+    localparam HIT    = 2'd2;
+    localparam MISS   = 2'd3;
+    reg [1:0] state = IDLE;
+
+    reg [4:0] lookup_counter; // To iterate through TLB entries
+
+    // --- Address decoding ---
+    wire mmu_enable = ((satp >> 31) & 1);
     wire [19:0] vpn = virt_addr[31:12];
     wire [11:0] offset = virt_addr[11:0];
 
-    // TLB lookup
-    wire [TLB_ENTRIES-1:0] tlb_hits;
-    assign tlb_hits[0] = tlb_valid[0] && (tlb_vpn[0] == vpn);
-    assign tlb_hits[1] = tlb_valid[1] && (tlb_vpn[1] == vpn);
-    assign tlb_hits[2] = tlb_valid[2] && (tlb_vpn[2] == vpn);
-    assign tlb_hits[3] = tlb_valid[3] && (tlb_vpn[3] == vpn);
+    // --- Combinational logic for lookup ---
+    wire [19:0] ppn = tlb_ppn_perms[lookup_counter][29:10];
 
-    wire tlb_hit_any = |tlb_hits;
-    assign tlb_hit = tlb_hit_any;
-    assign tlb_miss = mmu_enable && !tlb_hit_any;
-
-    // Find the matching entry
-    wire [19:0] ppn_found = tlb_hits[0] ? tlb_ppn[0] :
-                          tlb_hits[1] ? tlb_ppn[1] :
-                          tlb_hits[2] ? tlb_ppn[2] :
-                          tlb_hits[3] ? tlb_ppn[3] :
-                          20'h0;
-
-    wire [31:0] translated_addr = {ppn_found, offset};
-
-    assign phys_addr = mmu_enable ? (tlb_hit ? translated_addr : virt_addr) : virt_addr; // For now, on miss, return virt_addr
-
-    reg prev_tlb_write_trigger;
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            prev_tlb_write_trigger <= 1'b0;
-        end else begin
-            prev_tlb_write_trigger <= tlb_write_index[0];
+    // --- TLB Write Logic ---
+    // Write is synchronous
+    always @(posedge clk) begin
+        if (tlb_write_index[4]) begin // Use a bit in the index as a write enable trigger
+            tlb_vpn[tlb_write_index[3:0]] <= tlb_vpn_in;
+            tlb_ppn_perms[tlb_write_index[3:0]] <= tlb_ppn_perms_in;
+            tlb_valid[tlb_write_index[3:0]] <= 1'b1;
         end
     end
 
-    wire write_trigger_edge = tlb_write_index[0] && !prev_tlb_write_trigger;
-
+    // --- Main FSM and Lookup Logic ---
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            tlb_valid <= 0;
-            tlb_vpn[0] <= 0;
-            tlb_ppn[0] <= 0;
-            tlb_perms[0] <= 0;
-            tlb_vpn[1] <= 0;
-            tlb_ppn[1] <= 0;
-            tlb_perms[1] <= 0;
-            tlb_vpn[2] <= 0;
-            tlb_ppn[2] <= 0;
-            tlb_perms[2] <= 0;
-            tlb_vpn[3] <= 0;
-            tlb_ppn[3] <= 0;
-            tlb_perms[3] <= 0;
-        end else if (write_trigger_edge) begin
-            tlb_valid[tlb_write_index[3:2]] <= tlb_ppn_perms[0];
-            tlb_vpn[tlb_write_index[3:2]]   <= tlb_vpn_in[19:0];
-            tlb_ppn[tlb_write_index[3:2]]   <= tlb_ppn_perms[31:10];
-            tlb_perms[tlb_write_index[3:2]] <= tlb_ppn_perms[3:1];
+            state <= IDLE;
+            lookup_done <= 1'b0;
+            tlb_hit <= 1'b0;
+            tlb_miss <= 1'b0;
+            phys_addr <= 32'h0;
+            lookup_counter <= 5'd0;
+        end else begin
+            // Default outputs
+            lookup_done <= 1'b0;
+            tlb_hit <= 1'b0;
+            tlb_miss <= 1'b0;
+
+            case (state)
+                IDLE: begin
+                    if (start_lookup) begin
+                        if (!mmu_enable) begin
+                            // MMU is off, treat as an immediate hit (identity mapping)
+                            phys_addr <= virt_addr;
+                            state <= HIT;
+                        end else begin
+                            // Start sequential search
+                            lookup_counter <= 5'd0;
+                            state <= LOOKUP;
+                        end
+                    end
+                end
+
+                LOOKUP: begin
+                    // Check one entry per cycle
+                    if (tlb_valid[lookup_counter] && tlb_vpn[lookup_counter][19:0] == vpn) begin
+                        // Found a match
+                        phys_addr <= {ppn, offset};
+                        state <= HIT;
+                    end else if (lookup_counter == TLB_ENTRIES - 1) begin
+                        // Reached the end without a match
+                        state <= MISS;
+                    end else begin
+                        // Continue to next entry
+                        lookup_counter <= lookup_counter + 1;
+                    end
+                end
+
+                HIT: begin
+                    tlb_hit <= 1'b1;
+                    lookup_done <= 1'b1;
+                    state <= IDLE;
+                end
+
+                MISS: begin
+                    tlb_miss <= 1'b1;
+                    lookup_done <= 1'b1;
+                    state <= IDLE;
+                end
+            endcase
+        end
+    end
+
+    // Initialization for simulation
+    integer i;
+    initial begin
+        for (i=0; i<TLB_ENTRIES; i=i+1) begin
+            tlb_vpn[i] = 32'b0;
+            tlb_ppn_perms[i] = 32'b0;
+            tlb_valid[i] = 1'b0;
         end
     end
 

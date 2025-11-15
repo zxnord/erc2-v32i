@@ -14,11 +14,14 @@ module soc(
     end
 
     // --- Memoria RAM (Directamente en el SOC) ---
-    reg [31:0] memory [0:1023]; // Memoria de 4KB (1024 palabras de 32 bits)
+    // La memoria se inicializa desde un fichero externo.
+    // La siguiente línea es un atributo específico para Yosys (síntesis).
+    (* ram_init_file = "../firmware/test_sw_ptw.hex" *)
+    reg [31:0] memory [0:32767]; // Memoria de 128KB (32768 palabras de 32 bits)
 
-    // Carga del programa desde firmware.hex
+    // La siguiente línea es para la simulación (ej. con Icarus Verilog).
     initial begin
-        $readmemh("../firmware/test_tlb.hex", memory);
+        $readmemh("../firmware/test_sw_ptw.hex", memory);
     end
 
     // --- Interconexiones CPU <-> Memoria/Periféricos ---
@@ -31,7 +34,10 @@ module soc(
     wire [31:0] data_out;            // Salida del puerto de datos de la memoria
 
     // --- Instancia del Procesador ---
+    wire [3:0] cpu_state;
+
     procesador cpu (
+        .debug_state_out(cpu_state),
         .clk(clk_25mhz),
         .reset(reset),
         .instruction_in(instruction_out),
@@ -44,7 +50,7 @@ module soc(
 
     // --- Decodificador de Direcciones y Acceso a Memoria/Periféricos ---
     localparam RAM_START_ADDR = 32'h00000000;
-    localparam RAM_END_ADDR   = 32'h00000FFF;
+    localparam RAM_END_ADDR   = 32'h0001FFFF;
     localparam LED_ADDR       = 32'h80000000;
 
     // Lógica de Lectura - Puerto de Instrucción (Combinacional)
@@ -69,10 +75,14 @@ module soc(
     assign led = led_reg;
 
     always @(posedge clk_25mhz) begin
-        // Los LEDs se actualizan si hay una escritura habilitada a su dirección específica
-        if (data_wenable && is_led_access) begin
-            led_reg <= data_wdata[7:0];
-        end
+        // --- DEBUG: Override LEDs to show CPU FSM state ---
+        led_reg[3:0] <= cpu_state;
+        led_reg[7:4] <= 4'b0; // Keep upper LEDs off for clarity
+
+        // Original logic commented out for debugging
+        // if (data_wenable && is_led_access) begin
+        //     led_reg <= data_wdata[7:0];
+        // end
     end
 
 endmodule
