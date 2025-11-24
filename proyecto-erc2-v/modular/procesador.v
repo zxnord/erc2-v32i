@@ -40,6 +40,7 @@ module procesador(
     reg [3:0] state = FETCH_START;
 
     reg [4:0] exception_cause_reg;
+    reg [31:0] debug_counter; // Dummy counter to prevent over-optimization
 
     // --- CSR Registers ---
     reg [31:0] mstatus_reg, mepc_reg, mcause_reg, mtvec_reg, mtval_reg;
@@ -172,6 +173,7 @@ module procesador(
             pc <= 32'h0; state <= FETCH_START; instruction_reg <= 32'h13; priv_mode <= 2'b11;
             mstatus_reg <= 32'h0; mepc_reg <= 32'h0; mcause_reg <= 32'h0; mtvec_reg <= 32'h0; mtval_reg <= 32'h0;
             satp_reg <= 32'h0;
+            debug_counter <= 32'h0;
         end else begin
             // Defaults
             i_mmu_start <= 1'b0;
@@ -230,6 +232,7 @@ module procesador(
                 end
 
                 MEM_SETUP: begin
+                    debug_counter <= debug_counter + 1; // Do something useless
                     state <= MEM_START;
                 end
 

@@ -16,7 +16,7 @@ OBJS = $(SOURCES:.c=.o)
 OBJS := $(OBJS:.S=.o)
 
 # --- Opciones de Compilación ---
-CFLAGS = -march=rv32ima -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
+CFLAGS = -march=rv32ima_zicsr -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
 
 # --- Reglas del Makefile ---
 .PHONY: all clean

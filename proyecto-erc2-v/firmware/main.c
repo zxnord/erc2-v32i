@@ -109,6 +109,41 @@ void main() {
     );
     if (old_val != -5 || mem_var != -5) while(1);
 
+    // Test 10: S-Mode Page Table Walk
+    test_no = 10;
+    *LEDS = test_no;
+    delay(1000000);
+
+    // Manually set up page tables for a VA -> PA mapping
+    // We will map Virtual Address 0x10000000 to Physical Address 0x80000000 (LEDs)
+    // And Virtual Address 0x00000000 to Physical Address 0x00000000 (for code)
+    volatile unsigned int* l1_table = (volatile unsigned int*)0x1000;
+    volatile unsigned int* l0_code_table = (volatile unsigned int*)0x2000;
+    volatile unsigned int* l0_data_table = (volatile unsigned int*)0x3000;
+    volatile unsigned int* virt_leds = (volatile unsigned int*)0x10000000;
+
+    // L1 PTE for code (VA 0x0...): points to L0 table at PPN 2
+    l1_table[0] = (2 << 10) | 1;
+    // L0 PTE for code (VA 0x0...): maps to PA 0x0...
+    l0_code_table[0] = (0 << 10) | 15; // PPN=0, V,R,W,X
+
+    // L1 PTE for data (VA 0x10000...): points to L0 table at PPN 3
+    l1_table[64] = (3 << 10) | 1;
+    // L0 PTE for data (VA 0x10000000): maps to PA 0x80000000 (LEDs)
+    l0_data_table[0] = (0x80000 << 10) | 15; // PPN=0x80000, V,R,W,X
+
+    // Enable MMU (SATP_MODE_SV32 | PPN_of_L1_TABLE)
+    unsigned int satp_val = (1 << 31) | 1; // Mode=Sv32, PPN=1 (0x1000)
+    asm volatile ("csrw satp, %0" : : "r"(satp_val));
+    asm volatile ("sfence.vma");
+
+    // Write to the virtual address. This should trigger the PTW, which will
+    // walk the tables we just set up, populate the TLB, and complete the write.
+    // If any part of this fails, the CPU will hang, leaving '10' on the LEDs.
+    // The value 0xCC should appear on the LEDs if successful.
+    *virt_leds = 0xCC;
+    delay(1000000);
+
     // All tests passed
     *LEDS = 0x42;
     delay(1000000);

@@ -1,44 +1,47 @@
-# Makefile for the Software PTW test
+# Makefile para el test específico 'test_sw_ptw'
 
-# --- Compiler Configuration ---
+# --- Configuración del Compilador ---
 CROSS_COMPILE ?= riscv64-unknown-elf-
 
-# The name of the final binary
+# El nombre del binario final para este test
 TARGET      = test_sw_ptw
 
-# Tools
+# Herramientas
 CC = $(CROSS_COMPILE)gcc
 OBJCOPY = $(CROSS_COMPILE)objcopy
 
-# --- Source Files ---
-SOURCES = test_sw_ptw.S
+# --- Ficheros Fuente ---
+# Solo necesitamos el fichero de ensamblador para este test
+SOURCES = $(TARGET).S
 OBJS = $(SOURCES:.S=.o)
 
-# --- Compilation Options ---
-CFLAGS = -march=rv32imazicsr -mabi=ilp32 -O0 -g -nostdlib -Tlinker.ld
+# --- Opciones de Compilación ---
+# Importante: Usamos el linker script específico para este test
+LDSCRIPT = linker_sw_ptw.ld
+CFLAGS = -march=rv32imazicsr -mabi=ilp32 -O0 -g -nostdlib -T$(LDSCRIPT)
 
-# --- Makefile Rules ---
+# --- Reglas del Makefile ---
 .PHONY: all clean
 
-# The default target is to build the .hex file
+# El objetivo por defecto es construir el fichero .hex
 all: $(TARGET).hex
 
-# Rule to convert the binary to clean Verilog HEX format
+# Regla para convertir el binario a formato Verilog HEX limpio
 $(TARGET).hex: $(TARGET).bin
 	./bin_to_hex.py $^ $@
 
-# Rule to extract the raw binary from the ELF file
+# Regla para extraer el binario raw del fichero ELF
 $(TARGET).bin: $(TARGET).elf
 	$(OBJCOPY) -O binary $^ $@
 
-# Rule to link the objects and create the final ELF
+# Regla para enlazar los objetos y crear el ELF final
 $(TARGET).elf: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
-# Generic rules for compiling/assembling
+# Regla genérica para ensamblar
 %.o: %.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Target to clean the generated files
+# Objetivo para limpiar los ficheros generados
 clean:
-	rm -f *.o *.elf *.bin *.hex
+	rm -f $(TARGET).o $(TARGET).elf $(TARGET).bin $(TARGET).hex

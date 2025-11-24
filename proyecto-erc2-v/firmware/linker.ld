@@ -20,6 +20,9 @@ SECTIONS
     *(.text .text.*)
   } > ram
 
+  /* Reserve space for page tables written by the C test */
+  . = 0x4000;
+
   /* Sección de datos de solo lectura */
   .rodata : {
     . = ALIGN(4);
