@@ -5,10 +5,17 @@ module soc(
     output wire [7:0] led
 );
 
+    // --- Clock Divider ---
+    reg [23:0] slow_clk_counter = 0;
+    always @(posedge clk_25mhz) begin
+        slow_clk_counter <= slow_clk_counter + 1;
+    end
+    wire slow_clk = slow_clk_counter[23];
+
     // --- Reset Logic ---
     reg reset = 1'b1;
     reg [4:0] reset_counter = 5'b0;
-    always @(posedge clk_25mhz) begin
+    always @(posedge slow_clk) begin // Clocked by slow_clk
         if (&reset_counter) reset <= 1'b0;
         else reset_counter <= reset_counter + 1;
     end
@@ -26,20 +33,22 @@ module soc(
     wire [31:0] data_address;        // Dirección para loads/stores (desde la ALU)
     wire [31:0] data_wdata;          // Dato a escribir por la CPU
     wire        data_wenable;        // Habilitación de escritura por la CPU
+    wire [7:0]  cpu_debug_out;       // Salida de debug de la CPU
 
     wire [31:0] instruction_out;     // Salida del puerto de instrucción de la memoria
     wire [31:0] data_out;            // Salida del puerto de datos de la memoria
 
     // --- Instancia del Procesador ---
     procesador cpu (
-        .clk(clk_25mhz),
+        .clk(slow_clk), // Clocked by slow_clk
         .reset(reset),
         .instruction_in(instruction_out),
         .mem_rdata_in(data_out),
         .instruction_address_out(instruction_address),
         .mem_address_out(data_address),
         .mem_wdata_out(data_wdata),
-        .mem_wenable_out(data_wenable)
+        .mem_wenable_out(data_wenable),
+        .debug_out(cpu_debug_out)
     );
 
     // --- Decodificador de Direcciones y Acceso a Memoria/Periféricos ---
@@ -58,21 +67,23 @@ module soc(
     assign data_out = is_ram_access ? memory[data_address[11:2]] : 32'h00000000;
 
     // Escritura en RAM
-    always @(posedge clk_25mhz) begin
+    always @(posedge slow_clk) begin // Clocked by slow_clk
         if (data_wenable && is_ram_access) begin
             memory[data_address[11:2]] <= data_wdata;
         end
     end
 
-    // --- Periférico: LEDs Mapeados en Memoria ---
-    reg [7:0] led_reg = 8'h00;  // Start with LEDs off
-    assign led = led_reg;
+    // --- Periférico: LEDs Mapeados en Memoria (AHORA USADO PARA DEBUG) ---
+    // reg [7:0] led_reg = 8'h00;
+    assign led = cpu_debug_out; // Directly output CPU debug info
 
-    always @(posedge clk_25mhz) begin
+    /*
+    always @(posedge slow_clk) begin // Clocked by slow_clk
         // Los LEDs se actualizan si hay una escritura habilitada a su dirección específica
         if (data_wenable && is_led_access) begin
             led_reg <= data_wdata[7:0];
         end
     end
+    */
 
 endmodule
